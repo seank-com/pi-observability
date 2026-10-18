@@ -185,8 +185,21 @@ test("quoted detail boundary keeps possessives and contractions and stays idempo
 		["Review \"alpha\" then 'beta' for Bob's team.", "Review [redacted-detail] then [redacted-detail] for Bob's team."],
 		["Review \"alpha\" and 'beta' beside Don's notes.", "Review [redacted-detail] and [redacted-detail] beside Don's notes."],
 		["Inspect https://alice:password@example.test/private?q=secret with token=top-secret and summarize \"private contents\"", "Inspect [redacted-url] with token=[redacted] and summarize [redacted-detail]"],
+		["Check \u{10400}'s notes beside 'detail'.", "Check \u{10400}'s notes beside [redacted-detail]."],
+		["Review \"\"abc\" now.", "Review \"[redacted-detail] now."],
 	];
 	for (const purpose of passThrough) {
+		assert.equal(sanitizeAuditIntent(purpose), purpose);
+		assert.equal(sanitizeAuditIntent(sanitizeAuditIntent(purpose)), sanitizeAuditIntent(purpose));
+	}
+	// Pass-through regressions for the two review findings: closing quotes
+	// followed by a supplementary-plane letter or digit are not closers, and
+	// empty/adjacent double quotes keep the legacy no-match behavior.
+	for (const purpose of [
+		"'x'\u{10400} keeps its quotes",
+		"'y'\u{1d7ce} keeps its quotes",
+		"Review \"\" now.",
+	]) {
 		assert.equal(sanitizeAuditIntent(purpose), purpose);
 		assert.equal(sanitizeAuditIntent(sanitizeAuditIntent(purpose)), sanitizeAuditIntent(purpose));
 	}
@@ -195,7 +208,9 @@ test("quoted detail boundary keeps possessives and contractions and stays idempo
 		assert.equal(once, expected);
 		assert.equal(sanitizeAuditIntent(once), once);
 	}
-	assert.equal(sanitizeAuditIntent("Export token='x' for the gateway"), "Export token=[redacted] for the gateway");
+	const secretOnce = sanitizeAuditIntent("Export token='x' for the gateway");
+	assert.equal(secretOnce, "Export token=[redacted] for the gateway");
+	assert.equal(sanitizeAuditIntent(secretOnce), secretOnce);
 });
 
 test("possessive intent persists and is found again by tool-call ID", async () => {

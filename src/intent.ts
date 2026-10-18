@@ -41,37 +41,46 @@ function redactUrlText(raw: string): string {
 }
 
 const QUOTE_WORD_CHAR = /\p{L}|\p{N}/u;
-const MAX_QUOTED_DETAIL_LENGTH = 200;
+const MAX_QUOTED_DETAIL_CONTENT = 200;
+const DOUBLE_QUOTED_DETAIL = /"[^"\r\n]{1,200}"/g;
 
-function findClosingQuote(text: string, quote: string, open: number): number {
-	let content = 0;
-	for (let index = open + 1; index < text.length; index++) {
-		const char = text[index];
-		if (char === "\r" || char === "\n") return -1;
-		if (char === quote
-			&& content >= 1
-			&& (quote === "\"" || index + 1 >= text.length || !QUOTE_WORD_CHAR.test(text[index + 1]))) {
-			return index;
-		}
-		content++;
-		if (content > MAX_QUOTED_DETAIL_LENGTH) return -1;
-	}
-	return -1;
+/** True when the Unicode code point immediately before `index` is a letter or digit. */
+function wordCharBefore(text: string, index: number): boolean {
+	if (index <= 0) return false;
+	const unit = text.charCodeAt(index - 1);
+	if (unit >= 0xdc00 && unit <= 0xdfff && text.charCodeAt(index - 2) >= 0xd800 && text.charCodeAt(index - 2) <= 0xdbff)
+		return QUOTE_WORD_CHAR.test(String.fromCodePoint((text.charCodeAt(index - 2) - 0xd800) * 0x400 + unit - 0xdc00 + 0x10000));
+	return QUOTE_WORD_CHAR.test(String.fromCharCode(unit));
 }
 
-/** Redacts `"..."` and `'...'` spans. An apostrophe counts as a quote
- * delimiter only when it actually quotes: the opening `'` is not preceded by
- * a letter or digit, and the closing `'` is not followed by one, so
- * possessives and contractions (`Alice's`, `isn't`, `teams'`) pass through.
- * Idempotent: the replacement text contains no quote characters. */
-function redactQuotedDetail(text: string): string {
+/** True when the Unicode code point at or after `index` is a letter or digit. */
+function wordCharAfter(text: string, index: number): boolean {
+	if (index >= text.length) return false;
+	const unit = text.charCodeAt(index);
+	if (unit >= 0xd800 && unit <= 0xdbff && index + 1 < text.length && text.charCodeAt(index + 1) >= 0xdc00 && text.charCodeAt(index + 1) <= 0xdfff)
+		return QUOTE_WORD_CHAR.test(String.fromCodePoint((unit - 0xd800) * 0x400 + text.charCodeAt(index + 1) - 0xdc00 + 0x10000));
+	return QUOTE_WORD_CHAR.test(String.fromCharCode(unit));
+}
+
+/** Redacts `'...'` spans. An apostrophe counts as a quote delimiter only when
+ * it actually quotes: the opening `'` is not preceded by a letter or digit and
+ * the closing `'` is not followed by one (checked per Unicode code point, so
+ * supplementary-plane letters behave like any other), keeping possessives and
+ * contractions (`Alice's`, `isn't`, `teams'`, `\u{10400}'s`) intact. Content is
+ * 1-200 characters and cannot cross CR/LF. Idempotent: the replacement text
+ * contains no quote characters. */
+function redactSingleQuotedDetail(text: string): string {
 	let output = "";
 	let index = 0;
 	while (index < text.length) {
 		const char = text[index];
-		if (char === "\""
-			|| (char === "'" && (index === 0 || !QUOTE_WORD_CHAR.test(text[index - 1])))) {
-			const close = findClosingQuote(text, char, index);
+		if (char === "'" && !wordCharBefore(text, index)) {
+			let close = -1;
+			for (let probe = index + 1; probe < text.length; probe++) {
+				const unit = text[probe];
+				if (unit === "\r" || unit === "\n" || probe - index > MAX_QUOTED_DETAIL_CONTENT) break;
+				if (unit === "'" && !wordCharAfter(text, probe + 1)) { close = probe; break; }
+			}
 			if (close !== -1) {
 				output += "[redacted-detail]";
 				index = close + 1;
@@ -99,14 +108,17 @@ export function sanitizeAuditIntentDetailed(
 	if (SHELL_SYNTAX.test(withoutUrls)) return { ok: false, reason: "shell_syntax" };
 	if (OPTION_TOKEN.test(withoutUrls)) return { ok: false, reason: "option" };
 	if (RAW_PATH.test(withoutUrls)) return { ok: false, reason: "path" };
-	const quotedDetail = redactQuotedDetail(withoutUrls
+	const quoted = withoutUrls
 		.replace(CONTROL_OR_BIDI, "")
 		.replace(SECRET_ASSIGNMENT, "$1=[redacted]")
 		.replace(BEARER_SECRET, "Bearer [redacted]")
 		.replace(COMMON_TOKEN, "[redacted]")
 		.replace(TELEGRAM_TOKEN, "[redacted]")
-		.replace(OPAQUE_TOKEN, "[redacted]"));
-	const sanitized = quotedDetail
+		.replace(OPAQUE_TOKEN, "[redacted]")
+		// Double-quoted detail keeps its exact pre-existing matching behavior
+		// (including empty/adjacent quote cases), so it stays the original regex.
+		.replace(DOUBLE_QUOTED_DETAIL, "[redacted-detail]");
+	const sanitized = redactSingleQuotedDetail(quoted)
 		.replace(/\s+/g, " ")
 		.trim();
 	if (!sanitized) return { ok: false, reason: "empty" };

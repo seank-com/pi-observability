@@ -168,6 +168,59 @@ test("audit intent sanitization accepts guided purpose prose and rejects argumen
 	assert.equal(sanitizeAuditIntent("x".repeat(MAX_AUDIT_INTENT_LENGTH + 1)), undefined);
 });
 
+test("quoted detail boundary keeps possessives and contractions and stays idempotent", () => {
+	const passThrough = [
+		"Check Alice's and Bob's notes before review.",
+		"Confirm it isn't missing and doesn't duplicate entries.",
+		"Review the teams' shared backlog notes.",
+		"Compare the 2020's release notes with the 2030's draft.",
+		"Summarize Élodie's findings for l'équipe.",
+		"Check Élodie\u2019s notes before the review.",
+		"It's fine to leave the file as is.",
+	];
+	const redactions = [
+		["Summarize 'quoted detail' beside Alice's notes.", "Summarize [redacted-detail] beside Alice's notes."],
+		["Alice's 'quoted detail' notes are referenced.", "Alice's [redacted-detail] notes are referenced."],
+		["Review 'alpha' then 'beta' for Bob's team.", "Review [redacted-detail] then [redacted-detail] for Bob's team."],
+		["Review \"alpha\" then 'beta' for Bob's team.", "Review [redacted-detail] then [redacted-detail] for Bob's team."],
+		["Review \"alpha\" and 'beta' beside Don's notes.", "Review [redacted-detail] and [redacted-detail] beside Don's notes."],
+		["Inspect https://alice:password@example.test/private?q=secret with token=top-secret and summarize \"private contents\"", "Inspect [redacted-url] with token=[redacted] and summarize [redacted-detail]"],
+	];
+	for (const purpose of passThrough) {
+		assert.equal(sanitizeAuditIntent(purpose), purpose);
+		assert.equal(sanitizeAuditIntent(sanitizeAuditIntent(purpose)), sanitizeAuditIntent(purpose));
+	}
+	for (const [input, expected] of redactions) {
+		const once = sanitizeAuditIntent(input);
+		assert.equal(once, expected);
+		assert.equal(sanitizeAuditIntent(once), once);
+	}
+	assert.equal(sanitizeAuditIntent("Export token='x' for the gateway"), "Export token=[redacted] for the gateway");
+});
+
+test("possessive intent persists and is found again by tool-call ID", async () => {
+	const mock = mockExtension();
+	const messages: any = contextMessages([
+		{ name: "read", parameters: schema({ path: { type: "string" } }) },
+	]);
+	await mock.request({ messages }, mock.context);
+	const intent = "Check Alice's and Bob's notes before review.";
+	const replacement = await mock.handler("message_end")({ message: {
+		role: "assistant",
+		content: [{ type: "toolCall", id: "call|possessive", name: "read", arguments: { path: "private.txt", intent } }],
+	} }, mock.context);
+	assert.equal(replacement.message.content[0].arguments.intent, undefined);
+	assert.equal(mock.entries[0].data.intent, intent);
+	assert.equal(findPersistedToolIntent(mock.entries, "call|possessive")?.intent, intent);
+	mock.entries.push({ type: "message", message: replacement.message });
+	const nextPayload: any = contextMessages(
+		[{ name: "read", parameters: schema({ path: { type: "string" } }) }],
+		[historicalAssistantEntry("call|possessive", "read", { path: "private.txt" }).message],
+	);
+	const next = await mock.request({ messages: nextPayload }, mock.context);
+	assert.equal(next[1].content[0].arguments.intent, intent);
+});
+
 test("missing intent shows only sanitized fallback before the later execution gate blocks", async () => {
 	const mock = mockExtension();
 	await mock.request({

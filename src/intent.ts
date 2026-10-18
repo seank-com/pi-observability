@@ -40,6 +40,50 @@ function redactUrlText(raw: string): string {
 	return `[redacted-url]${trailing}`;
 }
 
+const QUOTE_WORD_CHAR = /\p{L}|\p{N}/u;
+const MAX_QUOTED_DETAIL_LENGTH = 200;
+
+function findClosingQuote(text: string, quote: string, open: number): number {
+	let content = 0;
+	for (let index = open + 1; index < text.length; index++) {
+		const char = text[index];
+		if (char === "\r" || char === "\n") return -1;
+		if (char === quote
+			&& content >= 1
+			&& (quote === "\"" || index + 1 >= text.length || !QUOTE_WORD_CHAR.test(text[index + 1]))) {
+			return index;
+		}
+		content++;
+		if (content > MAX_QUOTED_DETAIL_LENGTH) return -1;
+	}
+	return -1;
+}
+
+/** Redacts `"..."` and `'...'` spans. An apostrophe counts as a quote
+ * delimiter only when it actually quotes: the opening `'` is not preceded by
+ * a letter or digit, and the closing `'` is not followed by one, so
+ * possessives and contractions (`Alice's`, `isn't`, `teams'`) pass through.
+ * Idempotent: the replacement text contains no quote characters. */
+function redactQuotedDetail(text: string): string {
+	let output = "";
+	let index = 0;
+	while (index < text.length) {
+		const char = text[index];
+		if (char === "\""
+			|| (char === "'" && (index === 0 || !QUOTE_WORD_CHAR.test(text[index - 1])))) {
+			const close = findClosingQuote(text, char, index);
+			if (close !== -1) {
+				output += "[redacted-detail]";
+				index = close + 1;
+				continue;
+			}
+		}
+		output += char;
+		index++;
+	}
+	return output;
+}
+
 /** Classifies rejection without retaining or reporting the rejected content. */
 export function sanitizeAuditIntentDetailed(
 	value: unknown,
@@ -55,14 +99,14 @@ export function sanitizeAuditIntentDetailed(
 	if (SHELL_SYNTAX.test(withoutUrls)) return { ok: false, reason: "shell_syntax" };
 	if (OPTION_TOKEN.test(withoutUrls)) return { ok: false, reason: "option" };
 	if (RAW_PATH.test(withoutUrls)) return { ok: false, reason: "path" };
-	const sanitized = withoutUrls
+	const quotedDetail = redactQuotedDetail(withoutUrls
 		.replace(CONTROL_OR_BIDI, "")
 		.replace(SECRET_ASSIGNMENT, "$1=[redacted]")
 		.replace(BEARER_SECRET, "Bearer [redacted]")
 		.replace(COMMON_TOKEN, "[redacted]")
 		.replace(TELEGRAM_TOKEN, "[redacted]")
-		.replace(OPAQUE_TOKEN, "[redacted]")
-		.replace(/"[^"\r\n]{1,200}"|'[^'\r\n]{1,200}'/g, "[redacted-detail]")
+		.replace(OPAQUE_TOKEN, "[redacted]"));
+	const sanitized = quotedDetail
 		.replace(/\s+/g, " ")
 		.trim();
 	if (!sanitized) return { ok: false, reason: "empty" };

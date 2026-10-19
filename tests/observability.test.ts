@@ -195,11 +195,19 @@ test("intent sanitization keeps plain prose and redacts only exact credential va
 	assert.equal(sanitizeAuditIntentDetailed("   ", true, none).reason, "empty");
 	assert.equal(sanitizeAuditIntentDetailed("\u200b\u200e\x07", true, none).reason, "empty");
 	assert.equal(sanitizeAuditIntentDetailed("x".repeat(1001), true, none).reason, "sanitized_too_long");
-	// Whitespace normalization and control/BiDi stripping are retained.
+	// Whitespace normalization and control/BiDi stripping are retained, and
+	// hygiene runs BEFORE the exact-redaction pass so normalization cannot
+	// manufacture a credential out of split pieces.
 	assert.deepEqual(sanitizeAuditIntentDetailed("Review  the\tplan\nnow.", true, none),
 		{ ok: true, value: "Review the plan now." });
 	assert.deepEqual(sanitizeAuditIntentDetailed("Review\u200b the plan now.", true, none),
 		{ ok: true, value: "Review the plan now." });
+	const demoToken: CredentialReplacement = { key: "DEMO_TOKEN", value: "alphabeta", marker: "<REDACTED DEMO_TOKEN VALUE>" };
+	assert.deepEqual(sanitizeAuditIntentDetailed("Review alpha\u200bbeta today.", true, [demoToken]),
+		{ ok: true, value: "Review <REDACTED DEMO_TOKEN VALUE> today." });
+	const phrase: CredentialReplacement = { key: "PHRASE_PASSWORD", value: "super secret", marker: "<REDACTED PHRASE_PASSWORD VALUE>" };
+	assert.deepEqual(sanitizeAuditIntentDetailed("Note super  secret here.", true, [phrase]),
+		{ ok: true, value: "Note <REDACTED PHRASE_PASSWORD VALUE> here." });
 	// A re-sanitization is stable for ordinary stored values.
 	const once = sanitized(`Export token=${secret} for the gateway`).value as string;
 	assert.equal(sanitizeAuditIntentDetailed(once, true, replacements).value, once);
@@ -302,6 +310,14 @@ test("legacy persisted intents validate structurally and are redacted only at eg
 		),
 	}, mock.context);
 	assert.equal(restored[1].content[0].arguments.intent, legacyEntry.intent);
+	// The restored copy enters the provider path: egress redaction hides the
+	// now-known credential in the outgoing payload while the stored evidence
+	// stays unchanged.
+	const outgoing = await mock.handler("before_provider_request")({
+		payload: { instruction: legacyEntry.intent },
+	}, mock.context);
+	assert.equal(outgoing.instruction, "Review the gateway notes before release with <REDACTED LEGACY_TOKEN VALUE> appended");
+	assert.equal(mock.entries[0].data.intent, legacyEntry.intent);
 
 	// Oversized or malformed stored entries are still rejected.
 	assert.equal(isToolIntentData({ ...legacyEntry, intent: "x".repeat(MAX_AUDIT_INTENT_LENGTH + 1) }), false);

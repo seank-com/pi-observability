@@ -29,11 +29,14 @@ export type AuditIntentSanitizationResult =
  * Sanitizes an audit intent for storage. The account is the security boundary:
  * the only content redaction is the exact credential-value replacement shared
  * with provider-egress redaction (same discovered set and implementation).
- * Basic text hygiene (control/BiDi stripping, whitespace normalization) and
- * the length bounds are retained. Formatting is a model instruction, not a
- * syntax rule: apostrophes, quotes, URLs, backticks, and Markdown pass
- * through as plain text. `replacements === undefined` fails closed: a failed
- * credential discovery must not be treated as an empty replacement set.
+ * Basic text hygiene (control/BiDi stripping, whitespace normalization) runs
+ * BEFORE the single shared redaction pass, so normalization cannot rejoin the
+ * pieces of a credential after they were redacted; the stored-length and
+ * nonempty checks then apply to the redacted value. Formatting is a model
+ * instruction, not a syntax rule: apostrophes, quotes, URLs, backticks, and
+ * Markdown pass through as plain text. `replacements === undefined` (failed
+ * discovery) fails closed and is distinct from an explicitly empty set, which
+ * is a valid registry with nothing to filter.
  */
 export function sanitizeAuditIntentDetailed(
 	value: unknown,
@@ -44,10 +47,10 @@ export function sanitizeAuditIntentDetailed(
 	if (typeof value !== "string") return { ok: false, reason: "invalid_type" };
 	if (value.length > 4_000) return { ok: false, reason: "too_long" };
 	if (replacements === undefined) return { ok: false, reason: "redaction_unavailable" };
-	const sanitized = redactString(value, replacements)
-		.replace(CONTROL_OR_BIDI, "")
-		.replace(/\s+/g, " ")
-		.trim();
+	const sanitized = redactString(
+		value.replace(CONTROL_OR_BIDI, "").replace(/\s+/g, " ").trim(),
+		replacements,
+	);
 	if (!sanitized) return { ok: false, reason: "empty" };
 	if (sanitized.length > MAX_AUDIT_INTENT_LENGTH) return { ok: false, reason: "sanitized_too_long" };
 	return { ok: true, value: sanitized };

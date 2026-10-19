@@ -131,6 +131,19 @@ singleton or installed-package check substitutes for this handshake.
 
 `dist/index.js` is the single explicit Pi entry. `/contract`, `/intent`, and
 `/redaction` have declarations and no entry-point activation side effects.
+
+The `/intent` export is the current supported surface for standalone sanitizers:
+`sanitizeAuditIntentDetailed(value, present, replacements)` requires the
+discovered replacement set. `replacements === undefined` (failed discovery)
+fails closed and is distinct from an explicitly empty set, which is a valid
+registry with nothing to filter. `isToolIntentData` is the structural
+validator used for persisted evidence; `MAX_AUDIT_INTENT_LENGTH` is the stored
+cap. The rescope removed the old two-argument `sanitizeAuditIntent` helper;
+no sibling consumer uses it. Runtime consumers should prefer the capability's
+bound `sanitizeIntent`, which carries the live set and readiness.
+`/redaction` additionally exports `redactString`, the exact-occurrence replacer
+shared by provider egress and intent sanitization.
+
 TypeScript emits ESM and rewrites relative `.ts` imports to `.js`. No production
 library dependency is required; the imported Pi host type is a `*` peer, with an
 exact separate development host pin. The tarball test exercises native helper

@@ -3,7 +3,7 @@ import { sanitizeAuditIntentDetailed } from "./intent.ts";
 import type { CredentialReplacement } from "./egress-redaction.ts";
 
 export const INTENT_RETRY_ENTRY_TYPE = "tool-intent-retry";
-export const INTENT_RETRY_PROMPT = "Your previous tool call omitted the required intent argument. Repeat exactly the same tool call once, adding only intent: one plain sentence stating its purpose, with no line breaks, Markdown formatting, quoted passages, or backticks. Do not change the tool name or any other arguments. Return exactly one tool call, not a prose explanation.";
+export const INTENT_RETRY_PROMPT = "Your previous tool call omitted the required intent argument. Repeat exactly the same tool call once, adding only intent: one plain sentence stating its purpose without argument values or paths, and with no line breaks, Markdown formatting, quoted passages, or backticks. Do not change the tool name or any other arguments. Return exactly one tool call, not a prose explanation.";
 export const RETRY_TIMEOUT_MS = 120_000;
 export const RETRY_BUDGET_MS = 240_000;
 export interface RetryCall { id: string; name: string; arguments: Record<string, unknown> }

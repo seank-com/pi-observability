@@ -49,6 +49,21 @@ before execution. Diagnostic records contain structural reasons, never raw
 rejected intent or arguments. `tool-intent`, `tool-intent-diagnostic`, contract
 version 1, and the `intent` argument remain unchanged.
 
+Intent sanitization is the account boundary, not a content filter. It checks the
+value is a string within the input and stored length bounds, strips control and
+invisible-directionality characters, normalizes whitespace, and replaces exact
+credential values using the same discovered set and string replacer as provider
+egress. It performs no URL, path, option, shell-syntax, token, or quoted-detail
+parsing: apostrophes, quotes, URLs, backticks, and Markdown pass through as plain
+text. When credential discovery is unavailable, sanitization fails closed with a
+specific reason instead of defaulting to an empty replacement set. Persisted audit
+evidence is validated structurally (contract version, field types, nonempty intent
+within the stored cap) and by call identity/uniqueness, never by re-running the
+current replacement set: a set can change with rotation and even a redaction marker
+can contain a registered value, so equality after today's replacement would
+misclassify valid stored evidence. Restored copies enter the provider path and are
+protected by the existing egress redaction.
+
 ## One corrective tool-call retry
 
 At the awaited `message_end` boundary, a verified decorated call with absent

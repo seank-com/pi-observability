@@ -3,6 +3,7 @@ import {
 	TOOL_INTENT_ENTRY_TYPE,
 	type ToolIntentEntryData,
 } from "./contract.ts";
+import { redactString, type CredentialReplacement } from "./egress-redaction.ts";
 
 export const MAX_AUDIT_INTENT_LENGTH = 1_000;
 
@@ -11,150 +12,40 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const CONTROL_OR_BIDI = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u200b\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g;
-const SECRET_ASSIGNMENT = /\b(token|secret|password|passwd|credential|cookie|authorization|api[-_ ]?key)\s*(?::|=|\bis\b)\s*(?:"[^"]*"|'[^']*'|\S+)/gi;
-const BEARER_SECRET = /\bbearer\s+[A-Za-z0-9._~+/=-]{8,}/gi;
-const COMMON_TOKEN = /\b(?:sk|rk|pk|ghp|github_pat|xox[baprs])-[_A-Za-z0-9-]{8,}\b/gi;
-const TELEGRAM_TOKEN = /\b\d{6,}:[A-Za-z0-9_-]{20,}\b/g;
-const OPAQUE_TOKEN = /\b(?=[A-Za-z0-9_-]{24,}\b)(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]+\b/g;
-const URL_TEXT = /https?:\/\/[^\s<>"']+/gi;
-const SHELL_SYNTAX = /[`$\\|;<>]|&&/m;
-const OPTION_TOKEN = /(?:^|\s)--?[A-Za-z0-9]/m;
-const RAW_PATH = /(?:^|\s)(?:~\/|\/(?!\s))/m;
 
 export type AuditIntentRejectionReason =
 	| "missing"
 	| "invalid_type"
 	| "too_long"
 	| "empty"
-	| "shell_syntax"
-	| "option"
-	| "path"
+	| "redaction_unavailable"
 	| "sanitized_too_long";
 
 export type AuditIntentSanitizationResult =
 	| { ok: true; value: string }
 	| { ok: false; reason: AuditIntentRejectionReason };
 
-function redactUrlText(raw: string): string {
-	const trailing = raw.match(/[),.;!?]+$/)?.[0] ?? "";
-	return `[redacted-url]${trailing}`;
-}
-
-const QUOTE_WORD_CHAR = /\p{L}|\p{N}/u;
-const MAX_QUOTED_DETAIL_CONTENT = 200;
-
-/** True when the Unicode code point immediately before `index` is a letter or digit. */
-function wordCharBefore(text: string, index: number): boolean {
-	if (index <= 0) return false;
-	const unit = text.charCodeAt(index - 1);
-	if (unit >= 0xdc00 && unit <= 0xdfff && text.charCodeAt(index - 2) >= 0xd800 && text.charCodeAt(index - 2) <= 0xdbff)
-		return QUOTE_WORD_CHAR.test(String.fromCodePoint((text.charCodeAt(index - 2) - 0xd800) * 0x400 + unit - 0xdc00 + 0x10000));
-	return QUOTE_WORD_CHAR.test(String.fromCharCode(unit));
-}
-
-/** True when the Unicode code point at `index` is a letter or digit. */
-function wordCharAt(text: string, index: number): boolean {
-	if (index >= text.length) return false;
-	const unit = text.charCodeAt(index);
-	if (unit >= 0xd800 && unit <= 0xdbff && index + 1 < text.length && text.charCodeAt(index + 1) >= 0xdc00 && text.charCodeAt(index + 1) <= 0xdfff)
-		return QUOTE_WORD_CHAR.test(String.fromCodePoint((unit - 0xd800) * 0x400 + text.charCodeAt(index + 1) - 0xdc00 + 0x10000));
-	return QUOTE_WORD_CHAR.test(String.fromCharCode(unit));
-}
-
-/** Close for a `\"...\"` span opening at `open`: the FIRST following `\"` is
- * the only candidate (content cannot contain `\"`), and it is valid with
- * 1-200 content characters and no CR/LF. Returns the close index or -1. This
- * reproduces the pre-existing double-quote regex, including empty/adjacent
- * quote edge cases. */
-function findDoubleClose(text: string, open: number): number {
-	for (let probe = open + 1; probe < text.length; probe++) {
-		const unit = text[probe];
-		if (unit === "\r" || unit === "\n") return -1;
-		if (unit !== "\"") continue;
-		const content = probe - open - 1;
-		if (content < 1 || content > MAX_QUOTED_DETAIL_CONTENT) return -1;
-		return probe;
-	}
-	return -1;
-}
-
-/** Close for a `'...'` span opening at `open`: the first following `'` that is
- * not followed by a letter or digit (Unicode code point), with 1-200 content
- * characters and no CR/LF. A `'` that IS followed by a letter or digit (a
- * possessive or contraction) is content, not a close, so the scan continues. */
-function findSingleClose(text: string, open: number): number {
-	for (let probe = open + 1; probe < text.length; probe++) {
-		const unit = text[probe];
-		if (unit === "\r" || unit === "\n") return -1;
-		if (unit !== "'") continue;
-		const content = probe - open - 1;
-		if (content < 1) continue;
-		if (content > MAX_QUOTED_DETAIL_CONTENT) return -1;
-		if (wordCharAt(text, probe + 1)) continue;
-		return probe;
-	}
-	return -1;
-}
-
-/** Redacts quoted detail in a left-to-right pass, matching the encounter
- * order of the previous combined matcher. `\"...\"` keeps the exact pre-existing
- * behavior. `'...'` opens only when the `'` is not preceded by a letter or
- * digit and closes only at a `'` not followed by one, so `Alice's`, `isn't`,
- * `teams'`, and `\u{10400}'s` pass through while real quoted detail is still
- * redacted. Runs to a fixed point: redaction shortens the text, so a span
- * whose close was beyond 200 characters can come in range after an inner
- * span is redacted, and the stored value must survive re-sanitization. */
-function redactQuotedDetail(text: string): string {
-	let current = text;
-	for (let pass = 0; pass < 4_000; pass++) {
-		let output = "";
-		let index = 0;
-		while (index < current.length) {
-			const char = current[index];
-			let close = -1;
-			if (char === "\"") {
-				close = findDoubleClose(current, index);
-			} else if (char === "'" && !wordCharBefore(current, index)) {
-				close = findSingleClose(current, index);
-			}
-			if (close !== -1) {
-				output += "[redacted-detail]";
-				index = close + 1;
-				continue;
-			}
-			output += char;
-			index++;
-		}
-		if (output === current) return output;
-		current = output;
-	}
-	return current;
-}
-
-/** Classifies rejection without retaining or reporting the rejected content. */
+/**
+ * Sanitizes an audit intent for storage. The account is the security boundary:
+ * the only content redaction is the exact credential-value replacement shared
+ * with provider-egress redaction (same discovered set and implementation).
+ * Basic text hygiene (control/BiDi stripping, whitespace normalization) and
+ * the length bounds are retained. Formatting is a model instruction, not a
+ * syntax rule: apostrophes, quotes, URLs, backticks, and Markdown pass
+ * through as plain text. `replacements === undefined` fails closed: a failed
+ * credential discovery must not be treated as an empty replacement set.
+ */
 export function sanitizeAuditIntentDetailed(
 	value: unknown,
 	present = true,
+	replacements: readonly CredentialReplacement[] | undefined,
 ): AuditIntentSanitizationResult {
 	if (!present) return { ok: false, reason: "missing" };
 	if (typeof value !== "string") return { ok: false, reason: "invalid_type" };
 	if (value.length > 4_000) return { ok: false, reason: "too_long" };
-	const withoutUrls = value.replace(URL_TEXT, redactUrlText);
-	// Intent is prose, never a second argument channel. Tool/command names and
-	// filename basenames are fine; executable shell syntax, options, and raw paths
-	// invalidate it instead of being guessed or partially retained.
-	if (SHELL_SYNTAX.test(withoutUrls)) return { ok: false, reason: "shell_syntax" };
-	if (OPTION_TOKEN.test(withoutUrls)) return { ok: false, reason: "option" };
-	if (RAW_PATH.test(withoutUrls)) return { ok: false, reason: "path" };
-	const secretsRedacted = withoutUrls
+	if (replacements === undefined) return { ok: false, reason: "redaction_unavailable" };
+	const sanitized = redactString(value, replacements)
 		.replace(CONTROL_OR_BIDI, "")
-		.replace(SECRET_ASSIGNMENT, "$1=[redacted]")
-		.replace(BEARER_SECRET, "Bearer [redacted]")
-		.replace(COMMON_TOKEN, "[redacted]")
-		.replace(TELEGRAM_TOKEN, "[redacted]")
-		.replace(OPAQUE_TOKEN, "[redacted]");
-	const quoted = redactQuotedDetail(secretsRedacted);
-	const sanitized = quoted
 		.replace(/\s+/g, " ")
 		.trim();
 	if (!sanitized) return { ok: false, reason: "empty" };
@@ -162,20 +53,24 @@ export function sanitizeAuditIntentDetailed(
 	return { ok: true, value: sanitized };
 }
 
-/** Returns a complete, bounded, redacted audit value or undefined to fail closed. */
-export function sanitizeAuditIntent(value: unknown): string | undefined {
-	const result = sanitizeAuditIntentDetailed(value);
-	return result.ok ? result.value : undefined;
-}
-
-function isToolIntentData(value: unknown): value is ToolIntentEntryData {
+/**
+ * Structural validity of persisted audit evidence: contract version, field
+ * types, and basic intent text bounds (nonempty, stored cap). This deliberately
+ * does NOT re-run the current pipeline: a credential replacement set can change
+ * with rotation, and even a redaction marker can contain a registered value,
+ * so equality after today's replacement would misclassify valid stored
+ * evidence. Call identity/uniqueness is preserved by the call sites.
+ */
+export function isToolIntentData(value: unknown): value is ToolIntentEntryData {
 	if (!isRecord(value)) return false;
+	const intent = value.intent;
 	return value.version === OBSERVABILITY_CONTRACT_VERSION
 		&& typeof value.toolCallId === "string"
 		&& typeof value.toolName === "string"
-		&& typeof value.intent === "string"
-		&& typeof value.timestamp === "string"
-		&& sanitizeAuditIntent(value.intent) === value.intent;
+		&& typeof intent === "string"
+		&& intent.length > 0
+		&& intent.length <= MAX_AUDIT_INTENT_LENGTH
+		&& typeof value.timestamp === "string";
 }
 
 export function findPersistedToolIntent(entries: readonly unknown[], toolCallId: string): ToolIntentEntryData | undefined {

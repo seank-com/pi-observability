@@ -39,7 +39,7 @@ for (const provider of ["ollama", "openai-codex"]) test(`${provider}: one native
     assert.equal(f.entries.find(e => e.customType === "tool-intent-retry").data.outcome, "accepted");
 });
 for (const [label, reply] of Object.entries({
-    absent: answer([call()]), invalid: answer([call({ path: "fixture.txt", intent: "Inspect /private/file." })]),
+    absent: answer([call()]), invalid: answer([call({ path: "fixture.txt", intent: "x".repeat(1500) })]),
     changedArguments: answer([call({ path: "other", intent: "Inspect the fixture source." })]),
     changedTool: answer([{ ...call({ path: "fixture.txt", intent: "Inspect the fixture source." }), name: "bash" }]),
     multiple: answer([call(), call()]), prose: { content: [{ type: "text", text: "Inspect the fixture." }], stopReason: "stop" },

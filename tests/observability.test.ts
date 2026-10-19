@@ -187,21 +187,42 @@ test("quoted detail boundary keeps possessives and contractions and stays idempo
 		["Inspect https://alice:password@example.test/private?q=secret with token=top-secret and summarize \"private contents\"", "Inspect [redacted-url] with token=[redacted] and summarize [redacted-detail]"],
 		["Check \u{10400}'s notes beside 'detail'.", "Check \u{10400}'s notes beside [redacted-detail]."],
 		["Review \"\"abc\" now.", "Review \"[redacted-detail] now."],
+		["Review 'a \"b' c\" now.", "Review [redacted-detail] c\" now."],
+		["Review 'a' now.", "Review [redacted-detail] now."],
+		["Review '" + "a".repeat(199) + "' now.", "Review [redacted-detail] now."],
+		["Review '" + "a".repeat(200) + "' now.", "Review [redacted-detail] now."],
+		["Review '" + "a".repeat(201) + "' now.", "Review '" + "a".repeat(201) + "' now."],
+		["Review \"" + "a".repeat(200) + "\" now.", "Review [redacted-detail] now."],
+		["Review \"" + "a".repeat(201) + "\" now.", "Review \"" + "a".repeat(201) + "\" now."],
 	];
 	for (const purpose of passThrough) {
 		assert.equal(sanitizeAuditIntent(purpose), purpose);
 		assert.equal(sanitizeAuditIntent(sanitizeAuditIntent(purpose)), sanitizeAuditIntent(purpose));
 	}
-	// Pass-through regressions for the two review findings: closing quotes
-	// followed by a supplementary-plane letter or digit are not closers, and
-	// empty/adjacent double quotes keep the legacy no-match behavior.
-	for (const purpose of [
-		"'x'\u{10400} keeps its quotes",
-		"'y'\u{1d7ce} keeps its quotes",
-		"Review \"\" now.",
+	// Pass-through regressions for the review findings: closing quotes
+	// followed by a supplementary-plane letter or digit are not closers,
+	// empty/adjacent quotes keep the legacy no-match behavior, and CR/LF
+	// never closes a span. (The CR/LF cases expect the pipeline's existing
+	// whitespace normalization: the quotes are preserved, which is what the
+	// CR/LF rule under test protects.)
+	for (const [input, expected] of [
+		["'x'\u{10400} keeps its quotes", "'x'\u{10400} keeps its quotes"],
+		["'y'\u{1d7ce} keeps its quotes", "'y'\u{1d7ce} keeps its quotes"],
+		["Review \"\" now.", "Review \"\" now."],
+		["Review '' now.", "Review '' now."],
 	]) {
-		assert.equal(sanitizeAuditIntent(purpose), purpose);
-		assert.equal(sanitizeAuditIntent(sanitizeAuditIntent(purpose)), sanitizeAuditIntent(purpose));
+		assert.equal(sanitizeAuditIntent(input), expected);
+		assert.equal(sanitizeAuditIntent(expected), expected);
+	}
+	// CR and LF never close a span, so the quotes survive into the
+	// pipeline's existing whitespace normalization. (No fixed-point assertion
+	// here: the expected value itself still contains a valid quoted span that
+	// a second pass would redact.)
+	for (const [input, expected] of [
+		["Review 'a\x0ab' now.", "Review 'a b' now."],
+		["Review 'a\x0db' now.", "Review 'a b' now."],
+	]) {
+		assert.equal(sanitizeAuditIntent(input), expected);
 	}
 	for (const [input, expected] of redactions) {
 		const once = sanitizeAuditIntent(input);

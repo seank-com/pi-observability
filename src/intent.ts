@@ -42,7 +42,6 @@ function redactUrlText(raw: string): string {
 
 const QUOTE_WORD_CHAR = /\p{L}|\p{N}/u;
 const MAX_QUOTED_DETAIL_CONTENT = 200;
-const DOUBLE_QUOTED_DETAIL = /"[^"\r\n]{1,200}"/g;
 
 /** True when the Unicode code point immediately before `index` is a letter or digit. */
 function wordCharBefore(text: string, index: number): boolean {
@@ -53,8 +52,8 @@ function wordCharBefore(text: string, index: number): boolean {
 	return QUOTE_WORD_CHAR.test(String.fromCharCode(unit));
 }
 
-/** True when the Unicode code point at or after `index` is a letter or digit. */
-function wordCharAfter(text: string, index: number): boolean {
+/** True when the Unicode code point at `index` is a letter or digit. */
+function wordCharAt(text: string, index: number): boolean {
 	if (index >= text.length) return false;
 	const unit = text.charCodeAt(index);
 	if (unit >= 0xd800 && unit <= 0xdbff && index + 1 < text.length && text.charCodeAt(index + 1) >= 0xdc00 && text.charCodeAt(index + 1) <= 0xdfff)
@@ -62,35 +61,74 @@ function wordCharAfter(text: string, index: number): boolean {
 	return QUOTE_WORD_CHAR.test(String.fromCharCode(unit));
 }
 
-/** Redacts `'...'` spans. An apostrophe counts as a quote delimiter only when
- * it actually quotes: the opening `'` is not preceded by a letter or digit and
- * the closing `'` is not followed by one (checked per Unicode code point, so
- * supplementary-plane letters behave like any other), keeping possessives and
- * contractions (`Alice's`, `isn't`, `teams'`, `\u{10400}'s`) intact. Content is
- * 1-200 characters and cannot cross CR/LF. Idempotent: the replacement text
- * contains no quote characters. */
-function redactSingleQuotedDetail(text: string): string {
-	let output = "";
-	let index = 0;
-	while (index < text.length) {
-		const char = text[index];
-		if (char === "'" && !wordCharBefore(text, index)) {
+/** Close for a `\"...\"` span opening at `open`: the FIRST following `\"` is
+ * the only candidate (content cannot contain `\"`), and it is valid with
+ * 1-200 content characters and no CR/LF. Returns the close index or -1. This
+ * reproduces the pre-existing double-quote regex, including empty/adjacent
+ * quote edge cases. */
+function findDoubleClose(text: string, open: number): number {
+	for (let probe = open + 1; probe < text.length; probe++) {
+		const unit = text[probe];
+		if (unit === "\r" || unit === "\n") return -1;
+		if (unit !== "\"") continue;
+		const content = probe - open - 1;
+		if (content < 1 || content > MAX_QUOTED_DETAIL_CONTENT) return -1;
+		return probe;
+	}
+	return -1;
+}
+
+/** Close for a `'...'` span opening at `open`: the first following `'` that is
+ * not followed by a letter or digit (Unicode code point), with 1-200 content
+ * characters and no CR/LF. A `'` that IS followed by a letter or digit (a
+ * possessive or contraction) is content, not a close, so the scan continues. */
+function findSingleClose(text: string, open: number): number {
+	for (let probe = open + 1; probe < text.length; probe++) {
+		const unit = text[probe];
+		if (unit === "\r" || unit === "\n") return -1;
+		if (unit !== "'") continue;
+		const content = probe - open - 1;
+		if (content < 1) continue;
+		if (content > MAX_QUOTED_DETAIL_CONTENT) return -1;
+		if (wordCharAt(text, probe + 1)) continue;
+		return probe;
+	}
+	return -1;
+}
+
+/** Redacts quoted detail in a left-to-right pass, matching the encounter
+ * order of the previous combined matcher. `\"...\"` keeps the exact pre-existing
+ * behavior. `'...'` opens only when the `'` is not preceded by a letter or
+ * digit and closes only at a `'` not followed by one, so `Alice's`, `isn't`,
+ * `teams'`, and `\u{10400}'s` pass through while real quoted detail is still
+ * redacted. Runs to a fixed point: redaction shortens the text, so a span
+ * whose close was beyond 200 characters can come in range after an inner
+ * span is redacted, and the stored value must survive re-sanitization. */
+function redactQuotedDetail(text: string): string {
+	let current = text;
+	for (let pass = 0; pass < 4_000; pass++) {
+		let output = "";
+		let index = 0;
+		while (index < current.length) {
+			const char = current[index];
 			let close = -1;
-			for (let probe = index + 1; probe < text.length; probe++) {
-				const unit = text[probe];
-				if (unit === "\r" || unit === "\n" || probe - index > MAX_QUOTED_DETAIL_CONTENT) break;
-				if (unit === "'" && !wordCharAfter(text, probe + 1)) { close = probe; break; }
+			if (char === "\"") {
+				close = findDoubleClose(current, index);
+			} else if (char === "'" && !wordCharBefore(current, index)) {
+				close = findSingleClose(current, index);
 			}
 			if (close !== -1) {
 				output += "[redacted-detail]";
 				index = close + 1;
 				continue;
 			}
+			output += char;
+			index++;
 		}
-		output += char;
-		index++;
+		if (output === current) return output;
+		current = output;
 	}
-	return output;
+	return current;
 }
 
 /** Classifies rejection without retaining or reporting the rejected content. */
@@ -108,17 +146,15 @@ export function sanitizeAuditIntentDetailed(
 	if (SHELL_SYNTAX.test(withoutUrls)) return { ok: false, reason: "shell_syntax" };
 	if (OPTION_TOKEN.test(withoutUrls)) return { ok: false, reason: "option" };
 	if (RAW_PATH.test(withoutUrls)) return { ok: false, reason: "path" };
-	const quoted = withoutUrls
+	const secretsRedacted = withoutUrls
 		.replace(CONTROL_OR_BIDI, "")
 		.replace(SECRET_ASSIGNMENT, "$1=[redacted]")
 		.replace(BEARER_SECRET, "Bearer [redacted]")
 		.replace(COMMON_TOKEN, "[redacted]")
 		.replace(TELEGRAM_TOKEN, "[redacted]")
-		.replace(OPAQUE_TOKEN, "[redacted]")
-		// Double-quoted detail keeps its exact pre-existing matching behavior
-		// (including empty/adjacent quote cases), so it stays the original regex.
-		.replace(DOUBLE_QUOTED_DETAIL, "[redacted-detail]");
-	const sanitized = redactSingleQuotedDetail(quoted)
+		.replace(OPAQUE_TOKEN, "[redacted]");
+	const quoted = redactQuotedDetail(secretsRedacted);
+	const sanitized = quoted
 		.replace(/\s+/g, " ")
 		.trim();
 	if (!sanitized) return { ok: false, reason: "empty" };

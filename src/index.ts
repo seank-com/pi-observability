@@ -61,13 +61,11 @@ const sanitizerReason: Record<AuditIntentRejectionReason, ToolIntentDiagnosticRe
 	invalid_type: "provider_intent_invalid_type",
 	too_long: "provider_intent_too_long",
 	empty: "provider_intent_empty",
-	shell_syntax: "provider_intent_shell_syntax",
-	option: "provider_intent_option",
-	path: "provider_intent_path",
+	redaction_unavailable: "provider_intent_redaction_unavailable",
 	sanitized_too_long: "provider_intent_sanitized_too_long",
 };
 
-const INTENT_PROSE_RULE = "intent must be one short prose sentence stating the purpose, without file paths, command options, URLs, or shell syntax";
+const INTENT_PROSE_RULE = "intent must be one plain sentence stating the purpose, with no line breaks, Markdown formatting, quoted passages, or backticks";
 const UNVERIFIED_REQUEST_RULE = "this call did not come from a provider request that required intent, so it cannot be audited or run";
 const UNVERIFIED_AUDIT_RULE = "the audit record for this call could not be verified; retry the call with a new required intent argument";
 
@@ -80,9 +78,7 @@ const blockExplanation: Record<ToolIntentDiagnosticReason, string> = {
 	provider_intent_invalid_type: `intent must be a string; ${INTENT_PROSE_RULE}`,
 	provider_intent_too_long: `intent is too long; ${INTENT_PROSE_RULE}`,
 	provider_intent_empty: `intent is empty; ${INTENT_PROSE_RULE}`,
-	provider_intent_shell_syntax: `intent contains shell syntax; ${INTENT_PROSE_RULE}`,
-	provider_intent_option: `intent contains a command option; ${INTENT_PROSE_RULE}`,
-	provider_intent_path: `intent contains a file path; ${INTENT_PROSE_RULE}`,
+	provider_intent_redaction_unavailable: `credential redaction is unavailable, so this tool call cannot be audited safely; ${INTENT_PROSE_RULE}`,
 	provider_intent_sanitized_too_long: `intent is too long; ${INTENT_PROSE_RULE}`,
 	response_without_request: UNVERIFIED_REQUEST_RULE,
 	request_correlation_ambiguous: UNVERIFIED_REQUEST_RULE,
@@ -127,7 +123,7 @@ export function createObservabilityExtension(options: ObservabilityExtensionOpti
 			const capability: ObservabilityPolicyCapability = {
 				version: 1,
 				get ready() { return sessionReady && generation === capabilityGeneration && credentialReplacements !== undefined; },
-				sanitizeIntent: sanitizeAuditIntentDetailed,
+				sanitizeIntent: (value, present) => sanitizeAuditIntentDetailed(value, present, credentialReplacements),
 				redactRecovery(payload) {
 					if (!capability.ready || !credentialReplacements) return null;
 					try { return redactProviderPayload(payload, credentialReplacements); }
@@ -284,7 +280,7 @@ export function createObservabilityExtension(options: ObservabilityExtensionOpti
 						? part.arguments
 						: {};
 					const hasIntent = Object.prototype.hasOwnProperty.call(args, TOOL_INTENT_FIELD);
-					const intentResult = sanitizeAuditIntentDetailed(args[TOOL_INTENT_FIELD], hasIntent);
+					const intentResult = sanitizeAuditIntentDetailed(args[TOOL_INTENT_FIELD], hasIntent, credentialReplacements);
 					const reasons: ToolIntentDiagnosticReason[] = [];
 
 					if (correlationFailure) reasons.push(correlationFailure);
@@ -340,7 +336,8 @@ export function createObservabilityExtension(options: ObservabilityExtensionOpti
 						part, ownedRequest.messages!,
 						{ model: ownedRequest.model, modelRegistry: ctx.modelRegistry, thinkingLevel: ctx.thinkingLevel },
 						signal, payload => policy.redactRecovery(payload),
-						Math.min(settings.requestTimeoutMs ?? RETRY_TIMEOUT_MS, deadline - started));
+						Math.min(settings.requestTimeoutMs ?? RETRY_TIMEOUT_MS, deadline - started),
+						credentialReplacements);
 					if (signal.aborted || epoch !== generation || !sessionReady) return;
 					pi.appendEntry(INTENT_RETRY_ENTRY_TYPE, {
 						version: 1, toolCallId: part.id, toolName: part.name, outcome: result.intent ? "accepted" : "rejected",

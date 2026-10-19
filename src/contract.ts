@@ -11,7 +11,8 @@ export const OBSERVABILITY_CAPABILITY_REPLY = "pi-observability:v1:capability-re
 export interface ObservabilityPolicyCapability {
 	version: 1;
 	ready: boolean;
-	sanitizeIntent: typeof import("./intent.js").sanitizeAuditIntentDetailed;
+	/** Sanitizes an audit intent against the responder's discovered credential set. */
+	sanitizeIntent: (value: unknown, present?: boolean) => import("./intent.js").AuditIntentSanitizationResult;
 	/** Returns null after teardown or when credential discovery failed. */
 	redactRecovery: (payload: unknown) => unknown;
 }
@@ -51,9 +52,7 @@ export type ToolIntentDiagnosticReason =
 	| "provider_intent_invalid_type"
 	| "provider_intent_too_long"
 	| "provider_intent_empty"
-	| "provider_intent_shell_syntax"
-	| "provider_intent_option"
-	| "provider_intent_path"
+	| "provider_intent_redaction_unavailable"
 	| "provider_intent_sanitized_too_long"
 	| "response_without_request"
 	| "request_correlation_ambiguous"

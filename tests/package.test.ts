@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -116,4 +116,17 @@ for (const order of [[consumerEntry, entry], [entry, consumerEntry]]) {
     stdio: "pipe",
     timeout: 30_000,
   });
+  // Run the same native lifecycle suite from a consumer with no source-tree
+  // imports or installed sibling extensions. The host is explicitly supplied.
+  await mkdir(join(consumer, "tests/fixtures"), { recursive: true });
+  await cp(join(root, "tests/native-compaction.test.ts"), join(consumer, "tests/native-compaction.test.ts"));
+  await cp(join(root, "tests/fixtures/native-compaction.ts"), join(consumer, "tests/fixtures/native-compaction.ts"));
+  const native = execFileSync(process.execPath, ["--test", "tests/native-compaction.test.ts"], {
+    cwd: consumer,
+    env: { ...process.env, NODE_TEST_CONTEXT: undefined, HOME: join(consumer, "home"), PI_CODING_AGENT_DIR: join(consumer, "profile"), PI_CODING_AGENT_PACKAGE: host, OBSERVABILITY_TEST_ENTRY: join(consumer, "node_modules/@seank/pi-observability/dist/index.js") },
+    encoding: "utf8", stdio: "pipe", timeout: 30_000,
+  });
+  assert.match(native, /fail 0/);
+  assert.match(native, /skipped 0/);
+  assert.match(native, process.env.EXPECTED_SUMMARY_CALLBACKS === "forwarded" ? /pass 12/ : /pass 11/);
 });

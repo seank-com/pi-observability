@@ -33,6 +33,55 @@ object JSON-schema declarations are decorated. A reserved `intent` schema field,
 duplicate/invalid ID, or invisible audit record also blocks execution. Do not
 work around these failures by disabling validation or rewriting audit history.
 
+## Compaction and request correlation
+
+Compaction needs no extension setting. The host must expose
+`session_before_compact`, `session_compact` and `session_compact_failed`, keep
+normal agent execution quiescent during summary generation, and finish the
+compaction lifecycle before normal requests resume. Both stock and the
+callback-forwarding patched Pi 0.87.1 expose those lifecycle hooks. Compaction
+correlation isolation does not require the callback-forwarding patch.
+
+Choose the host according to the required redaction coverage:
+
+| Host | Normal agent auditing/redaction | Compaction correlation isolation | Default summary redaction |
+| --- | --- | --- | --- |
+| Stock Pi 0.87.1 | Supported | Requires native lifecycle qualification | Not covered: host bypasses the payload callback |
+| Callback-forwarding patched Pi 0.87.1, or equivalent upstream behavior | Supported | Requires native lifecycle qualification | Requires qualification that every attempt invokes and honors the payload callback |
+
+The patch is optional for standalone use that accepts the documented lack of
+summary redaction. It is required, or must be replaced by equivalent upstream
+behavior, when an integration requires credentials to be redacted from compaction
+summaries. There is no extension switch to restore a missing host callback. A
+matching version string alone does not establish callback forwarding or provider
+compliance.
+
+When the host forwards payload callbacks, summary requests are redacted. In
+either case, compaction-scoped events do not create or confirm tool-authorization
+snapshots. Successful, failed and cancelled compaction close their own scope.
+The next normal tool call must independently satisfy the usual context, egress,
+response and durable-audit checks. A summary's missing agent `message_end` does
+not leave an authorization entry waiting for that normal response.
+
+If a post-compaction call is blocked, distinguish a missing/failed host lifecycle
+boundary from an independently ambiguous agent request. Existing genuine
+ambiguity/overflow still fails closed until agent lifecycle retirement; a
+compaction event is not permission to clear it. Record the exact host artifact,
+compaction reason/outcome, event ordering and structural diagnostic reason for
+reproduction. Do not expire pending entries, disable the audit gate, rewrite
+journals or repeatedly retry tools to conceal broken correlation. A host that
+omits the required terminal boundary needs compatibility investigation rather
+than a timer-based scope reset.
+
+Compatibility qualification uses disposable sessions and scripted model streams
+through the actual host's manual, threshold and overflow compaction paths. Cover
+success, failure/cancellation, multiple summaries, redaction failure, subsequent
+audited tool execution and preservation of genuine ambiguity protections. Run
+these checks against the exact selected host and again with the installed
+package during assembly acceptance. Synthetic fixtures establish lifecycle
+correctness; a separately authorized live sniff test confirms the deployed
+provider/model path and does not replace the regressions.
+
 ## Optional policy consumers
 
 Use `queryObservabilityCapability(pi.events)` from `/contract` at session start.
@@ -44,10 +93,13 @@ be treated as permission to send the original payload.
 
 ## Host limits
 
-The test host is stock Pi 0.87.1; acceptance additionally exercises the selected
-patched 0.87.1 artifact. This does not upgrade Pi or repair its compaction payload
-callback behavior. If a host/provider bypasses `before_provider_request`, this
-extension cannot redact that request. Other versions require their own
+The general tool/serializer test host is stock Pi 0.87.1; acceptance additionally
+exercises the selected patched 0.87.1 artifact. Qualify compaction lifecycle
+isolation on both hosts, and summary redaction only on a callback-forwarding host,
+as described above. This
+extension does not upgrade Pi or supply missing payload callbacks. If a
+host/provider bypasses `before_provider_request`, the extension cannot redact
+that request. Other versions require their own
 serializer, lifecycle, and packed-loader validation before support is claimed.
 
 Shared examples use `read` and `bash` and are added once per ordinary request.

@@ -196,13 +196,27 @@ preserve its decorated declarations and audit contract. Arbitrary extension
 model calls do not necessarily run the agent context hook. Compaction support
 requires `session_before_compact`, `session_compact` and
 `session_compact_failed`, with main-agent execution quiescent during the summary
-scope and terminal notification before normal execution resumes. Summary
-providers must honor the final payload callback and its replacement on every
-attempt. The callback-forwarding patched Pi 0.87.1 exposes the lifecycle hooks;
-its exact artifact must be qualified with native compaction fixtures. Lifecycle
-hooks do not repair a host or provider that bypasses payload redaction. Other
-auxiliary model paths are not classified as compaction by inference. Other host versions, provider-specific
-schema restrictions, and nonstandard tool-call IDs need separate verification.
+scope and terminal notification before normal execution resumes. Stock and the
+callback-forwarding patched Pi 0.87.1 both expose these lifecycle hooks; the
+correlation-isolation fix does not itself require the callback-forwarding patch.
+Each selected artifact must be qualified with native compaction fixtures.
+
+Summary credential redaction is a separate host guarantee. Stock Pi 0.87.1 does
+not forward the agent's payload callback to its default summary requests, so
+observability cannot redact those requests. Normal agent-request auditing and
+redaction remain supported on stock Pi; summary egress is outside that host's
+redaction coverage. The callback-forwarding patch, or an upstream host with
+equivalent behavior, is required when compaction-summary redaction is required.
+Such a host and its summary providers must invoke the final payload callback and
+honor its replacement on every attempt. The patch forwards callbacks; it does
+not add the compaction lifecycle hooks.
+
+No extension option can supply a callback the host bypasses. Integrations that
+require summary redaction must select a qualified callback-forwarding host;
+stock compatibility is not evidence of full-egress redaction. Other auxiliary
+model paths are not classified as compaction by inference. Other host versions,
+provider-specific schema restrictions, and nonstandard tool-call IDs need
+separate verification.
 
 The optional `onProviderRequestDecorated` probe now reports
 `boundary: "context_with_system"` instead of an adapter ID. Its other structural

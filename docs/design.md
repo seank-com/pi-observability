@@ -6,6 +6,11 @@ observability contains no provider payload adapters.
 
 ## Request boundaries
 
+Tool-authorization correlation and provider redaction have different lifetimes.
+Only a normal agent request can own an immutable decorated tool-name snapshot
+and authorize tool execution. Compaction summary requests receive credential
+redaction but never enter that authorization queue.
+
 `context_with_system` transforms a separate copy of the normalized transcript.
 Every system message's `toolsAdded` declarations receive a required `intent`
 property; removals and redefinitions determine the active tool-name snapshot.
@@ -19,14 +24,56 @@ examples to the leading system message, preserving structured prompt sections
 and later deltas. Examples illustrate names and argument objects without a
 provider wire-format wrapper. Nothing is written back to session history.
 
-`before_provider_request` performs only provider-independent redaction. Exactly
-one pending context must await that egress event before its tool-name snapshot
-can authorize a response. Missing context, missing egress, failed decoration,
-failed redaction, or ambiguous pairing cannot authorize execution. Pi exposes
-no request ID linking these hooks: overlapping unconfirmed contexts poison
-correlation until settlement. A request without a context snapshot gets
-redaction but no tool authority. Transport retries below the payload hook reuse
-the original preparation. Providers must preserve this event ordering.
+`before_provider_request` applies provider-independent credential redaction to
+normal and compaction requests. Outside the compaction scope, exactly one
+pending context must await that egress event before its tool-name snapshot can
+authorize a response. Missing context, missing egress, failed decoration, failed
+redaction, or ambiguous pairing cannot authorize execution. Pi exposes no request
+ID linking these hooks: genuinely overlapping unconfirmed agent contexts poison
+correlation until settlement. An unmatched egress outside a known compaction
+scope grants no authority and retains the existing fail-closed correlation
+behavior. Transport retries below the payload hook reuse the original
+preparation. Providers must preserve this event ordering.
+
+### Compaction lifecycle
+
+Pi's `session_before_compact` opens a compaction scope. The host enters that
+boundary after the main request/tool-execution path has quiesced. Within the
+scope, `context_with_system` cannot create a normal authorization snapshot;
+summary contexts are not decorated as executable agent requests. Payload hooks
+still redact every summary request, including separate history and turn-prefix
+summaries and summary retries. These egress events neither confirm a normal
+snapshot nor append an undecorated entry to the normal pending queue. Summary
+redaction failure returns the same blocking replacement as other redaction
+failures; it grants no authority and does not poison an unrelated normal
+request's correlation. Summary completion is owned by the host's compaction
+lifecycle, not by an assumed agent `message_end` event.
+
+`session_compact` closes a successful scope. `session_compact_failed` closes a
+failed or cancelled scope. Terminal cleanup is safe when no scope was opened,
+including cancellation by another extension before this extension's start
+handler ran. Both outcomes retire compaction-local state before a subsequent
+normal context can establish fresh authorization. Session shutdown and the
+existing agent/session lifecycle retirement also clear abandoned compaction
+state; they do not allow a late summary to authorize a replacement session.
+
+This boundary is not a general correlation reset. Existing genuine ambiguity or
+overflow is not cleared merely because compaction occurs. A normal pending
+request or tool-authorization obligation unexpectedly crossing the entry
+boundary is not silently discarded or reclassified as a summary. It remains
+unverified and fails closed. No tool execution or corrective tool-call retry can
+be authorized from a compaction-scoped event, including an unexpected assistant
+tool response. Failed decoration on a normal request also remains a failed
+attempt, not permission to reuse a prior snapshot.
+
+After a complete, unambiguous compaction lifecycle, the next ordinary request
+must still pass its own context decoration, egress confirmation, response
+matching, audit persistence and execution checks. Recovery requires those
+positive boundaries, not elapsed time, request age, payload-shape guessing or a
+"trust the next request" exception. Compaction uses the host's existing lifecycle
+hooks without adding a request ID API, new timers, queue limits or settings.
+
+### Credential redaction
 
 Credential discovery uses assignment names containing `TOKEN`, `API_KEY`, or
 `PASSWORD` in the configured registry file. Only nonempty inherited values are
@@ -43,9 +90,11 @@ the payload replacement on the request path.
 persists sanitized audit entries, and correlates finalized calls with immutable
 request snapshots. The maximum pending request count is 32. Ambiguous correlation
 or overflow poisons correlation until agent settlement, rather than trusting a
-later response. Errors/aborts retire request snapshots; agent lifecycle resets
-abandoned state. `tool_call` verifies the ID, name, and persisted audit visibility
-before execution. Diagnostic records contain structural reasons, never raw
+later response. Compaction-scoped requests are excluded from this normal pending
+count. Errors/aborts retire request snapshots; agent lifecycle resets abandoned
+state. Compaction completion retires only its own scope, not pre-existing
+ambiguous normal-request state. `tool_call` verifies the ID, name, and persisted
+audit visibility before execution. Diagnostic records contain structural reasons, never raw
 rejected intent or arguments. `tool-intent`, `tool-intent-diagnostic`, contract
 version 1, and the `intent` argument remain unchanged.
 
@@ -144,9 +193,15 @@ shared system guidance/examples. Ordinary prompts are the tested guidance path;
 callers using a forced prompt must include equivalent guidance themselves.
 Later extensions can also change the transformed context; composition must
 preserve its decorated declarations and audit contract. Arbitrary extension
-model calls and compaction do not necessarily run the agent context hook.
-Redaction still depends on their invoking the final payload hook; this change
-does not repair host callback bypasses. Other host versions, provider-specific
+model calls do not necessarily run the agent context hook. Compaction support
+requires `session_before_compact`, `session_compact` and
+`session_compact_failed`, with main-agent execution quiescent during the summary
+scope and terminal notification before normal execution resumes. Summary
+providers must honor the final payload callback and its replacement on every
+attempt. The callback-forwarding patched Pi 0.87.1 exposes the lifecycle hooks;
+its exact artifact must be qualified with native compaction fixtures. Lifecycle
+hooks do not repair a host or provider that bypasses payload redaction. Other
+auxiliary model paths are not classified as compaction by inference. Other host versions, provider-specific
 schema restrictions, and nonstandard tool-call IDs need separate verification.
 
 The optional `onProviderRequestDecorated` probe now reports

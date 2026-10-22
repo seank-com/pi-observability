@@ -187,6 +187,19 @@ redaction, retry rejection and cancellation on stock and patched Pi. Private
 assembly verifies the complete component composition on the patched host.
 Live Ollama/Codex model compliance remains acceptance work for this revision.
 
+Native compaction fixtures use public SDK sessions, in-memory histories and a
+scripted provider on stock and callback-forwarding patched Pi 0.87.1. They cover
+manual, automatic threshold and overflow recovery, split-turn summaries,
+transient summary retry, success, failure, cancellation, early extension
+cancellation and extension-supplied summaries. Threshold cases prove that a
+subsequent audited tool executes without settling the assignment merely to
+reset correlation. The installed-tarball consumer runs the same native suite.
+Patched-host fixtures verify summary redaction, including blocking replacements
+on traversal failure; stock fixtures explicitly assert its missing summary
+callback coverage. Extension-boundary regressions preserve genuine ambiguity,
+overflow and unverified obligations across compaction and discard late held
+retry results. No live provider/model behavior is inferred from these fixtures.
+
 Pi's explicit forced-system-prompt projection runs after the context hook. Our
 host regression test confirms it preserves decorated schemas but replaces the
 shared system guidance/examples. Ordinary prompts are the tested guidance path;

@@ -19,8 +19,11 @@ Verified offline on stock and the selected patched Pi 0.87.1:
   requests stop before HTTP.
 - Corrective retry through the real Codex serializer/parser with scripted SSE,
   including rejection of changed arguments; generic retry failure/lifecycle tests.
-- Packed-package loading, capability lifecycle, and execution gating without
-  sibling packages.
+- Native manual, threshold and overflow compaction with scripted model streams:
+  subsequent audited tools execute after success, failure or cancellation;
+  split-turn summaries and summary retries do not contaminate authorization.
+- Packed-package loading, capability lifecycle, execution gating and the native
+  compaction suite without sibling packages.
 
 The private assembly also verifies a real SDK session with Pi’s built-in `read`
 tool, the native Ollama provider, and a local HTTP fixture on the selected patched
@@ -46,9 +49,12 @@ pi -e ./dist/index.js
 
 Use Node 24.14.1 or later and Pi 0.87.1. CI pins the stock npm host at 0.87.1;
 local acceptance also uses an explicitly selected patched 0.87.1 artifact.
-Other host versions are unverified. Host payload callbacks must actually run
-for redaction to apply; successful extension loading does not prove every
-provider/compaction path invokes the hook.
+Other host versions are unverified. Compaction correlation isolation works on
+stock and patched hosts. Stock 0.87.1 does not forward the agent payload callback
+to its default summaries, so summary credential redaction requires the
+callback-forwarding patch or equivalent upstream support. Normal agent-request
+auditing and redaction remain supported on stock. Successful extension loading
+does not prove every provider path honors the payload callback.
 
 Load your environment before starting Pi. By default, `~/.env` supplies the
 credential **names**, and inherited environment variables supply their effective
@@ -71,12 +77,18 @@ synthetic provider, auditing, redaction, and lifecycle tests. No provider calls
 or live agent state are used. `npm run test:package` packs and installs into a
 disposable consumer without any sibling component or private repository.
 
-Select a different host artifact explicitly:
+Select a different host artifact and its expected summary callback behavior
+explicitly. For a callback-forwarding host:
 
 ```bash
-PI_CODING_AGENT_PACKAGE=/path/to/pi-coding-agent npm test
-PI_CODING_AGENT_PACKAGE=/path/to/pi-coding-agent npm run test:package
+PI_CODING_AGENT_PACKAGE=/path/to/pi-coding-agent EXPECTED_SUMMARY_CALLBACKS=forwarded npm test
+PI_CODING_AGENT_PACKAGE=/path/to/pi-coding-agent EXPECTED_SUMMARY_CALLBACKS=forwarded npm run test:package
 ```
+
+`EXPECTED_SUMMARY_CALLBACKS=absent` is the stock-host test default. This is a
+fixture expectation, not an extension setting or a switch to disable redaction.
+The native tests and installed-consumer tests use the selected host's public SDK
+and disposable histories; no live models or agent sessions are required.
 
 To keep private terms and secrets out of commits, run `npm run hooks:install`
 once per clone. Commits and pushes are then refused when an added line or a

@@ -64,12 +64,18 @@ test("timeout bounds an uncooperative completion and late success cannot authori
     await f.finish(); assert.equal(f.requests[0].opts.signal.aborted, true); assert.equal(f.gate().block, true);
     resolve(answer()); await Promise.resolve(); assert.equal(f.entries.some(e => e.customType === "tool-intent"), false);
 });
-for (const action of ["abort", "session_shutdown", "agent_settled"]) test(`${action} retires a held retry`, async () => {
+for (const action of ["abort", "session_shutdown", "agent_settled", "session_before_compact"]) test(`${action} retires a held retry`, async () => {
     let resolve: any;
     const f = fixture(() => new Promise(r => { resolve = r; })); const pending = f.finish();
     await Promise.resolve(); if (action === "abort") f.controller.abort(); else f.invoke(action);
-    await pending; resolve(answer()); await Promise.resolve();
+    await pending;
+    if (action === "session_before_compact") f.invoke("session_compact");
+    resolve(answer()); await Promise.resolve();
     assert.equal(f.gate().block, true); assert.equal(f.entries.some(e => e.customType === "tool-intent"), false);
+    if (action === "session_before_compact") {
+        f.prepare(); await f.finish([call({ path: "fixture.txt", intent: "Inspect the fixture source." }, "fresh")]);
+        assert.equal(f.gate("fresh"), undefined);
+    }
 });
 test("sibling calls retry serially within one budget and keep separate original IDs", async () => {
     const f = fixture(answer()); await f.finish([call(), call(undefined, "sibling")]);

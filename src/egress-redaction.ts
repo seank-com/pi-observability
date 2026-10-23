@@ -55,7 +55,10 @@ export function discoverCredentialReplacements(
 		});
 }
 
-function redactString(value: string, replacements: readonly CredentialReplacement[]): string {
+/** Replaces exact occurrences of every discovered credential value with its
+ * marker, longest match first. Shared by provider-payload egress and the
+ * audit-intent sanitizer so both redact against the same discovered set. */
+export function redactString(value: string, replacements: readonly CredentialReplacement[]): string {
 	if (value.length === 0 || replacements.length === 0) return value;
 	let result = "";
 	let cursor = 0;

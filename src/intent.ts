@@ -3,6 +3,7 @@ import {
 	TOOL_INTENT_ENTRY_TYPE,
 	type ToolIntentEntryData,
 } from "./contract.ts";
+import { redactString, type CredentialReplacement } from "./egress-redaction.ts";
 
 export const MAX_AUDIT_INTENT_LENGTH = 1_000;
 
@@ -11,79 +12,68 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const CONTROL_OR_BIDI = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u200b\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g;
-const SECRET_ASSIGNMENT = /\b(token|secret|password|passwd|credential|cookie|authorization|api[-_ ]?key)\s*(?::|=|\bis\b)\s*(?:"[^"]*"|'[^']*'|\S+)/gi;
-const BEARER_SECRET = /\bbearer\s+[A-Za-z0-9._~+/=-]{8,}/gi;
-const COMMON_TOKEN = /\b(?:sk|rk|pk|ghp|github_pat|xox[baprs])-[_A-Za-z0-9-]{8,}\b/gi;
-const TELEGRAM_TOKEN = /\b\d{6,}:[A-Za-z0-9_-]{20,}\b/g;
-const OPAQUE_TOKEN = /\b(?=[A-Za-z0-9_-]{24,}\b)(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]+\b/g;
-const URL_TEXT = /https?:\/\/[^\s<>"']+/gi;
-const SHELL_SYNTAX = /[`$\\|;<>]|&&/m;
-const OPTION_TOKEN = /(?:^|\s)--?[A-Za-z0-9]/m;
-const RAW_PATH = /(?:^|\s)(?:~\/|\/(?!\s))/m;
 
 export type AuditIntentRejectionReason =
 	| "missing"
 	| "invalid_type"
 	| "too_long"
 	| "empty"
-	| "shell_syntax"
-	| "option"
-	| "path"
+	| "redaction_unavailable"
 	| "sanitized_too_long";
 
 export type AuditIntentSanitizationResult =
 	| { ok: true; value: string }
 	| { ok: false; reason: AuditIntentRejectionReason };
 
-function redactUrlText(raw: string): string {
-	const trailing = raw.match(/[),.;!?]+$/)?.[0] ?? "";
-	return `[redacted-url]${trailing}`;
-}
-
-/** Classifies rejection without retaining or reporting the rejected content. */
+/**
+ * Sanitizes an audit intent for storage. The account is the security boundary:
+ * the only content redaction is the exact credential-value replacement shared
+ * with provider-egress redaction (same discovered set and implementation).
+ * Basic text hygiene (control/BiDi stripping, whitespace normalization) runs
+ * BEFORE the single shared redaction pass, so normalization cannot rejoin the
+ * pieces of a credential after they were redacted; the stored-length and
+ * nonempty checks then apply to the redacted value. Formatting is a model
+ * instruction, not a syntax rule: apostrophes, quotes, URLs, backticks, and
+ * Markdown pass through as plain text. `replacements === undefined` (failed
+ * discovery) fails closed and is distinct from an explicitly empty set, which
+ * is a valid registry with nothing to filter.
+ */
 export function sanitizeAuditIntentDetailed(
 	value: unknown,
 	present = true,
+	replacements: readonly CredentialReplacement[] | undefined,
 ): AuditIntentSanitizationResult {
 	if (!present) return { ok: false, reason: "missing" };
 	if (typeof value !== "string") return { ok: false, reason: "invalid_type" };
 	if (value.length > 4_000) return { ok: false, reason: "too_long" };
-	const withoutUrls = value.replace(URL_TEXT, redactUrlText);
-	// Intent is prose, never a second argument channel. Tool/command names and
-	// filename basenames are fine; executable shell syntax, options, and raw paths
-	// invalidate it instead of being guessed or partially retained.
-	if (SHELL_SYNTAX.test(withoutUrls)) return { ok: false, reason: "shell_syntax" };
-	if (OPTION_TOKEN.test(withoutUrls)) return { ok: false, reason: "option" };
-	if (RAW_PATH.test(withoutUrls)) return { ok: false, reason: "path" };
-	const sanitized = withoutUrls
-		.replace(CONTROL_OR_BIDI, "")
-		.replace(SECRET_ASSIGNMENT, "$1=[redacted]")
-		.replace(BEARER_SECRET, "Bearer [redacted]")
-		.replace(COMMON_TOKEN, "[redacted]")
-		.replace(TELEGRAM_TOKEN, "[redacted]")
-		.replace(OPAQUE_TOKEN, "[redacted]")
-		.replace(/"[^"\r\n]{1,200}"|'[^'\r\n]{1,200}'/g, "[redacted-detail]")
-		.replace(/\s+/g, " ")
-		.trim();
+	if (replacements === undefined) return { ok: false, reason: "redaction_unavailable" };
+	const sanitized = redactString(
+		value.replace(CONTROL_OR_BIDI, "").replace(/\s+/g, " ").trim(),
+		replacements,
+	);
 	if (!sanitized) return { ok: false, reason: "empty" };
 	if (sanitized.length > MAX_AUDIT_INTENT_LENGTH) return { ok: false, reason: "sanitized_too_long" };
 	return { ok: true, value: sanitized };
 }
 
-/** Returns a complete, bounded, redacted audit value or undefined to fail closed. */
-export function sanitizeAuditIntent(value: unknown): string | undefined {
-	const result = sanitizeAuditIntentDetailed(value);
-	return result.ok ? result.value : undefined;
-}
-
-function isToolIntentData(value: unknown): value is ToolIntentEntryData {
+/**
+ * Structural validity of persisted audit evidence: contract version, field
+ * types, and basic intent text bounds (nonempty, stored cap). This deliberately
+ * does NOT re-run the current pipeline: a credential replacement set can change
+ * with rotation, and even a redaction marker can contain a registered value,
+ * so equality after today's replacement would misclassify valid stored
+ * evidence. Call identity/uniqueness is preserved by the call sites.
+ */
+export function isToolIntentData(value: unknown): value is ToolIntentEntryData {
 	if (!isRecord(value)) return false;
+	const intent = value.intent;
 	return value.version === OBSERVABILITY_CONTRACT_VERSION
 		&& typeof value.toolCallId === "string"
 		&& typeof value.toolName === "string"
-		&& typeof value.intent === "string"
-		&& typeof value.timestamp === "string"
-		&& sanitizeAuditIntent(value.intent) === value.intent;
+		&& typeof intent === "string"
+		&& intent.length > 0
+		&& intent.length <= MAX_AUDIT_INTENT_LENGTH
+		&& typeof value.timestamp === "string";
 }
 
 export function findPersistedToolIntent(entries: readonly unknown[], toolCallId: string): ToolIntentEntryData | undefined {

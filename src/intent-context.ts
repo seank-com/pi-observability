@@ -1,6 +1,6 @@
 import { rehydrateToolIntentHistory } from "./intent-history.ts";
 export const TOOL_INTENT_FIELD = "intent";
-export const TOOL_INTENT_GUIDANCE = "Every tool call has two parts: its normal execution arguments and an intent describing the purpose of the tool call. Intent is audit metadata and must be included on every call, including parallel calls and retries. The intent should be a single sentence plainly describing what the tool call accomplishes. Do not include argument values, file paths, or other parameters.";
+export const TOOL_INTENT_GUIDANCE = "Every tool call has two parts: its normal execution arguments and an intent describing the purpose of the tool call. Intent is audit metadata and must be included on every call, including parallel calls and retries. The intent should be one plain sentence stating what the tool call accomplishes, with no line breaks, Markdown formatting, quoted passages, or backticks. Do not include argument values or other parameters.";
 export const TOOL_INTENT_EXAMPLES = [
     "These examples illustrate tool names and arguments. Make actual calls through the native tool-call interface; do not write them as text.",
     'Tool: read\nArguments: {"path":"README.md","intent":"Understand the project setup instructions."}',

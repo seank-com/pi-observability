@@ -1,5 +1,5 @@
-import { sanitizeAuditIntent } from "./intent.ts";
-import { OBSERVABILITY_CONTRACT_VERSION, TOOL_INTENT_ENTRY_TYPE, type ToolIntentEntryData, } from "./contract.ts";
+import { isToolIntentData } from "./intent.ts";
+import { OBSERVABILITY_CONTRACT_VERSION, TOOL_INTENT_ENTRY_TYPE, type ToolIntentEntryData } from "./contract.ts";
 export interface ProviderHistoryRehydrationSummary {
     functionCalls: number;
     rehydrated: number;
@@ -10,15 +10,6 @@ export interface ProviderHistoryRehydrationSummary {
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
     return !!value && typeof value === "object" && !Array.isArray(value);
-}
-function validAuditData(value: unknown): value is ToolIntentEntryData {
-    return isRecord(value)
-        && value.version === OBSERVABILITY_CONTRACT_VERSION
-        && typeof value.toolCallId === "string"
-        && typeof value.toolName === "string"
-        && typeof value.intent === "string"
-        && typeof value.timestamp === "string"
-        && sanitizeAuditIntent(value.intent) === value.intent;
 }
 interface HistoricalCall {
     toolName: string;
@@ -58,7 +49,7 @@ function collectAudits(entries: readonly unknown[]): Map<string, AuditCandidates
         if (!id)
             continue;
         const candidates = audits.get(id) ?? { valid: [], invalidCount: 0 };
-        if (validAuditData(data))
+        if (isToolIntentData(data))
             candidates.valid.push(data);
         else
             candidates.invalidCount += 1;
@@ -66,7 +57,10 @@ function collectAudits(entries: readonly unknown[]): Map<string, AuditCandidates
     }
     return audits;
 }
-/** Restore audited intent only into request-local normalized assistant calls. */
+/** Restore audited intent only into request-local normalized assistant calls.
+ * Validity is structural (see isToolIntentData): stored evidence is never
+ * revalidated against today's credential replacement set. Restored copies
+ * enter the provider path and are protected by the existing egress redaction. */
 export function rehydrateToolIntentHistory(messages: Record<string, unknown>[], branchEntries: readonly unknown[]): ProviderHistoryRehydrationSummary {
     const summary = { functionCalls: 0, rehydrated: 0, missingAudit: 0, invalidAudit: 0, ambiguousAudit: 0, unsafeShape: 0 };
     const historicalCalls = collectHistoricalCalls(branchEntries);

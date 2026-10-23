@@ -49,6 +49,21 @@ before execution. Diagnostic records contain structural reasons, never raw
 rejected intent or arguments. `tool-intent`, `tool-intent-diagnostic`, contract
 version 1, and the `intent` argument remain unchanged.
 
+Intent sanitization is the account boundary, not a content filter. It checks the
+value is a string within the input and stored length bounds, strips control and
+invisible-directionality characters, normalizes whitespace, and replaces exact
+credential values using the same discovered set and string replacer as provider
+egress. It performs no URL, path, option, shell-syntax, token, or quoted-detail
+parsing: apostrophes, quotes, URLs, backticks, and Markdown pass through as plain
+text. When credential discovery is unavailable, sanitization fails closed with a
+specific reason instead of defaulting to an empty replacement set. Persisted audit
+evidence is validated structurally (contract version, field types, nonempty intent
+within the stored cap) and by call identity/uniqueness, never by re-running the
+current replacement set: a set can change with rotation and even a redaction marker
+can contain a registered value, so equality after today's replacement would
+misclassify valid stored evidence. Restored copies enter the provider path and are
+protected by the existing egress redaction.
+
 ## One corrective tool-call retry
 
 At the awaited `message_end` boundary, a verified decorated call with absent
@@ -116,6 +131,18 @@ singleton or installed-package check substitutes for this handshake.
 
 `dist/index.js` is the single explicit Pi entry. `/contract`, `/intent`, and
 `/redaction` have declarations and no entry-point activation side effects.
+
+The `/intent` export is the current supported surface for standalone sanitizers:
+`sanitizeAuditIntentDetailed(value, present, replacements)` requires the
+discovered replacement set. `replacements === undefined` (failed discovery)
+fails closed and is distinct from an explicitly empty set, which is a valid
+registry with nothing to filter. `isToolIntentData` is the structural
+validator used for persisted evidence; `MAX_AUDIT_INTENT_LENGTH` is the stored
+cap. Runtime consumers should prefer the capability's
+bound `sanitizeIntent`, which carries the live set and readiness.
+`/redaction` additionally exports `redactString`, the exact-occurrence replacer
+shared by provider egress and intent sanitization.
+
 TypeScript emits ESM and rewrites relative `.ts` imports to `.js`. No production
 library dependency is required; the imported Pi host type is a `*` peer, with an
 exact separate development host pin. The tarball test exercises native helper

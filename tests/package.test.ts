@@ -28,7 +28,7 @@ import { queryObservabilityCapability, type ObservabilityPolicyCapability } from
 import { sanitizeAuditIntentDetailed } from "@seank/pi-observability/intent";
 import { redactProviderPayload, type CredentialReplacement } from "@seank/pi-observability/redaction";
 const replacements: CredentialReplacement[] = [];
-const policy: ObservabilityPolicyCapability = {version:1,ready:true,sanitizeIntent:sanitizeAuditIntentDetailed,redactRecovery:payload=>redactProviderPayload(payload,replacements)};
+const policy: ObservabilityPolicyCapability = {version:1,ready:true,sanitizeIntent:(value,present)=>sanitizeAuditIntentDetailed(value,present??true,replacements),redactRecovery:payload=>redactProviderPayload(payload,replacements)};
 void policy; void queryObservabilityCapability;
 `);
   execFileSync(process.execPath, [join(root, "node_modules/typescript/bin/tsc"), "--noEmit", "--strict", "--module", "NodeNext", "--target", "ES2023", "types.ts"], { cwd: consumer, stdio: "pipe", timeout: 30_000 });
@@ -42,7 +42,7 @@ import { join } from "node:path";
 import { queryObservabilityCapability } from "@seank/pi-observability/contract";
 import { sanitizeAuditIntentDetailed } from "@seank/pi-observability/intent";
 import { redactProviderPayload } from "@seank/pi-observability/redaction";
-assert.equal(sanitizeAuditIntentDetailed("Inspect source.").ok, true);
+assert.equal(sanitizeAuditIntentDetailed("Inspect source.", true, []).ok, true);
 assert.deepEqual(redactProviderPayload({text:"fixture"}, []), {text:"fixture"});
 assert.equal(existsSync("node_modules/@earendil-works"), false);
 assert.equal(existsSync("node_modules/@seank/pi-ollama-provider"), false);

@@ -73,7 +73,7 @@ for (const mode of ["valid", "missing", "invalid", "no instrumentation"]) {
                 assert.ok(!JSON.stringify(redacted).includes("fixture-secret"));
             const args: any = { path: "fixture-secret" };
             if (mode !== "missing")
-                args.intent = mode === "invalid" ? "Run --bad" : "Inspect the fixture.";
+                args.intent = mode === "invalid" ? "x".repeat(1500) : "Inspect the fixture.";
             const message = { role: "assistant", content: requests === 1 ? [{ type: "toolCall", id: "call_1", name: "read", arguments: args }] : [{ type: "text", text: "done" }], ...model, model: model.id, stopReason: requests === 1 ? "toolUse" : "stop", usage, timestamp: 0 };
             return { async *[Symbol.asyncIterator]() { yield { type: "done", message }; }, result: async () => message };
         });

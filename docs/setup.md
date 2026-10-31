@@ -22,10 +22,15 @@ factory also accepts a clock and a structural decoration-summary probe for tests
 
 ## Tool intent
 
-Intent must be one short prose sentence describing purpose. Paths, command
-options, URLs, and shell syntax are rejected. Audited intent is capped at 1,000
+Intent must be one plain sentence describing purpose, with no line breaks, Markdown
+formatting, quoted passages, or backticks. Those are model instructions, not syntax
+rejections: apostrophes, quotes, URLs, backticks, and Markdown pass through as plain
+text. The only content redaction is the exact credential-value replacement shared with
+provider egress, using the same discovered set. Audited intent is capped at 1,000
 characters. A rejected call is blocked with a reason code and prose guidance;
-its rejected arguments are not echoed in the diagnostic.
+its rejected arguments are not echoed in the diagnostic. If credential discovery is
+unavailable, intent sanitization fails closed rather than treating the missing set as
+empty.
 
 If a call is blocked for missing request/audit correlation, check the host event sequence: `context_with_system`,
 `before_provider_request`, then `message_end` before validation. Only normalized

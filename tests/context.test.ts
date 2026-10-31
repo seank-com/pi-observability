@@ -87,7 +87,7 @@ test("history restores only unique audited calls, preserves source, and counts r
     const messages: any = [...context(), call("valid"), call("missing"), call("invalid"), call("duplicate"), call("mismatch"), call("unsafe", "read", { intent: "existing" }), call("unknown"), { role: "assistant", content: [{ type: "toolCall", name: "read", arguments: {} }] }];
     const entries: any = messages.slice(1, -1).map((message: any) => ({ type: "message", message }));
     entries.pop();
-    entries.push(audit("valid"), audit("invalid", "read", "Run --bad"), audit("duplicate"), audit("duplicate"), audit("mismatch", "bash"), audit("unsafe"));
+    entries.push(audit("valid"), audit("invalid", "read", "x".repeat(1001)), audit("duplicate"), audit("duplicate"), audit("mismatch", "bash"), audit("unsafe"));
     const original = structuredClone(messages), result = instrumentIntentContext(messages, entries);
     assert.deepEqual(result.history, { functionCalls: 8, rehydrated: 1, missingAudit: 1, invalidAudit: 1, ambiguousAudit: 3, unsafeShape: 2 });
     assert.equal((result.messages[1].content as any[])[0].arguments.intent, "Inspect the fixture.");
@@ -96,7 +96,7 @@ test("history restores only unique audited calls, preserves source, and counts r
     assert.deepEqual(instrumentIntentContext(messages, structuredClone(entries)).messages, result.messages);
 });
 test("duplicate persisted calls and mixed valid/invalid audits cannot rehydrate", () => {
-    for (const entries of [[{ type: "message", message: call() }, { type: "message", message: call() }, audit()], [{ type: "message", message: call() }, audit(), audit("one", "read", "Run --bad")]]) {
+    for (const entries of [[{ type: "message", message: call() }, { type: "message", message: call() }, audit()], [{ type: "message", message: call() }, audit(), audit("one", "read", "x".repeat(1001))]]) {
         const result = instrumentIntentContext([...context(), call()], entries);
         assert.equal(result.history.rehydrated, 0);
         assert.equal(result.history.ambiguousAudit, 1);

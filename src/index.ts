@@ -161,11 +161,16 @@ export function createObservabilityExtension(options: ObservabilityExtensionOpti
 		const pendingProviderRequests: PendingProviderRequest[] = [];
 		const finalizedToolCalls = new Map<string, FinalizedToolCall>();
 		let correlationPoison: "request_correlation_ambiguous" | "request_correlation_overflow" | undefined;
+		let compactionActive = false;
 
-		const resetRequestCorrelation = (): void => {
+		const retireRetries = (): void => {
 			generation++;
 			retryLifecycle.abort();
 			retryLifecycle = new AbortController();
+		};
+		const resetRequestCorrelation = (): void => {
+			retireRetries();
+			compactionActive = false;
 			pendingProviderRequests.splice(0);
 			finalizedToolCalls.clear();
 			correlationPoison = undefined;
@@ -193,8 +198,21 @@ export function createObservabilityExtension(options: ObservabilityExtensionOpti
 		pi.on("agent_start", resetRequestCorrelation);
 		pi.on("agent_settled", resetRequestCorrelation);
 		pi.on("session_shutdown", resetRequestCorrelation);
+		pi.on("session_before_compact", () => {
+			// Pi quiesces ordinary execution before this boundary. Unexpected normal
+			// obligations are not summaries, and compaction cannot discharge them.
+			if (compactionActive || pendingProviderRequests.length || finalizedToolCalls.size) {
+				correlationPoison ??= "request_correlation_ambiguous";
+			}
+			retireRetries();
+			compactionActive = true;
+		});
+		const finishCompaction = (): void => { compactionActive = false; };
+		pi.on("session_compact", finishCompaction);
+		pi.on("session_compact_failed", finishCompaction);
 
 		pi.on("context_with_system", (event, ctx) => {
+			if (compactionActive) return { messages: event.messages };
 			try {
 				if (!credentialReplacements || !sessionReady) throw new Error("Observability unavailable");
 				const { messages, activeNames, history } = instrumentIntentContext(event.messages, ctx.sessionManager.getBranch());
@@ -212,25 +230,31 @@ export function createObservabilityExtension(options: ObservabilityExtensionOpti
 		pi.on("before_provider_request", (event) => {
 			// No provider shape inspection. Confirm exactly one awaiting context.
 			// Extra requests (e.g. summaries) cannot borrow an already confirmed one.
-			const awaiting = pendingProviderRequests.filter(request => !request.egressConfirmed);
-			let request: PendingProviderRequest;
-			if (awaiting.length === 1) request = awaiting[0];
-			else {
-				request = {};
-				if (awaiting.length > 1) {
-					pendingProviderRequests.splice(0);
-					correlationPoison = "request_correlation_ambiguous";
-				} else recordProviderRequest(request);
+			// Summary completions have no agent message_end. Redact them without
+			// creating or confirming entries in the tool-authorization queue.
+			if (!compactionActive) {
+				const awaiting = pendingProviderRequests.filter(request => !request.egressConfirmed);
+				let request: PendingProviderRequest;
+				if (awaiting.length === 1) request = awaiting[0];
+				else {
+					request = {};
+					if (awaiting.length > 1) {
+						pendingProviderRequests.splice(0);
+						correlationPoison = "request_correlation_ambiguous";
+					} else recordProviderRequest(request);
+				}
+				request.egressConfirmed = true;
 			}
-			request.egressConfirmed = true;
 			try {
 				if (!credentialReplacements || !sessionReady) throw new Error("Redaction unavailable");
 				return redactProviderPayload(event.payload, credentialReplacements);
 			} catch {
 				// Retain overlap uncertainty even if the failed request clears state.
-				if (pendingProviderRequests.length > 1) correlationPoison = "request_correlation_ambiguous";
-				pendingProviderRequests.splice(0);
-				recordProviderRequest({ egressConfirmed: true });
+				if (!compactionActive) {
+					if (pendingProviderRequests.length > 1) correlationPoison = "request_correlation_ambiguous";
+					pendingProviderRequests.splice(0);
+					recordProviderRequest({ egressConfirmed: true });
+				}
 				return null;
 			}
 		});
@@ -241,8 +265,11 @@ export function createObservabilityExtension(options: ObservabilityExtensionOpti
 				.filter((part) => part.type === "toolCall")
 				.map((part) => part.name);
 			let request: PendingProviderRequest | undefined;
-			let correlationFailure: ToolIntentDiagnosticReason | undefined = correlationPoison;
-			if (correlationPoison) {
+			const compactionResponse = compactionActive;
+			let correlationFailure: ToolIntentDiagnosticReason | undefined = compactionResponse ? "response_undecorated" : correlationPoison;
+			if (compactionResponse) {
+				// Unexpected summary responses have no ordinary tool authority.
+			} else if (correlationPoison) {
 				// Stay poisoned until the agent run settles. An abandoned response may
 				// still arrive, so trusting a later snapshot would not be fail-closed.
 			} else if (pendingProviderRequests.length <= 1 || responseToolNames.length === 0) {
@@ -304,7 +331,7 @@ export function createObservabilityExtension(options: ObservabilityExtensionOpti
 						for (const reason of reasons) appendDiagnostic(reason);
 					}
 
-					if (typeof part.id === "string") {
+					if (!compactionResponse && typeof part.id === "string") {
 						// Raw IDs stay in memory only. This lets the execution gate report an
 						// invalid-ID reason without persisting an unsafe identifier.
 						finalizedToolCalls.set(part.id, { toolName: part.name, reasons });
@@ -356,9 +383,11 @@ export function createObservabilityExtension(options: ObservabilityExtensionOpti
 				delete (event.input as Record<string, unknown>)[TOOL_INTENT_FIELD];
 			}
 			const finalized = finalizedToolCalls.get(event.toolCallId);
-			finalizedToolCalls.delete(event.toolCallId);
+			if (!compactionActive) finalizedToolCalls.delete(event.toolCallId);
 			let reason: ToolIntentDiagnosticReason | undefined;
-			if (!finalized) reason = "tool_call_id_mismatch";
+			if (compactionActive) reason = "response_undecorated";
+			else if (correlationPoison) reason = correlationPoison;
+			else if (!finalized) reason = "tool_call_id_mismatch";
 			else if (finalized.toolName !== event.toolName) reason = "tool_name_mismatch";
 			else if (finalized.reasons.length > 0) reason = finalized.reasons[0];
 			else {

@@ -82,10 +82,39 @@ test("sibling calls retry serially within one budget and keep separate original 
     assert.equal(f.requests.length, 2); assert.equal(f.gate(), undefined); assert.equal(f.gate("sibling"), undefined);
     assert.equal(f.entries.filter(e => e.customType === "tool-intent").length, 2);
 });
-test("one shared deadline bounds sibling retries", async () => {
+test("one shared deadline bounds sibling retries", async t => {
+    t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
     const f = fixture(() => new Promise(() => {}), { retry: { requestTimeoutMs: 100, turnBudgetMs: 10 } });
-    await f.finish([call(), call(undefined, "sibling")]);
-    assert.equal(f.requests.length, 1); assert.equal(f.gate().block, true); assert.equal(f.gate("sibling").block, true);
+    const pending = f.finish([call(), call(undefined, "sibling")]);
+    assert.equal(f.requests.length, 1);
+    t.mock.timers.tick(9);
+    assert.equal(f.requests[0].opts.signal.aborted, false);
+    t.mock.timers.tick(1);
+    assert.equal(f.requests[0].opts.signal.aborted, true);
+    await pending;
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.gate().block, true); assert.equal(f.gate("sibling").block, true);
+    assert.deepEqual(f.entries.filter(e => e.customType === "tool-intent-retry").map(e => e.data.reason), ["timeout", "timeout"]);
+});
+test("a sibling can use remaining budget but cannot obtain a new turn deadline", async t => {
+    t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
+    let finishFirst!: (value: any) => void, startedSecond!: () => void, attempts = 0;
+    const first = new Promise(resolve => { finishFirst = resolve; });
+    const second = new Promise<void>(resolve => { startedSecond = resolve; });
+    const f = fixture(() => {
+        if (++attempts === 1) return first;
+        startedSecond(); return new Promise(() => {});
+    }, { retry: { requestTimeoutMs: 100, turnBudgetMs: 10 } });
+    const pending = f.finish([call(), call(undefined, "sibling")]);
+    t.mock.timers.tick(9);
+    finishFirst(answer()); await second;
+    assert.equal(f.requests.length, 2);
+    assert.equal(f.requests[1].opts.signal.aborted, false);
+    t.mock.timers.tick(1);
+    assert.equal(f.requests[1].opts.signal.aborted, true);
+    await pending;
+    assert.equal(f.gate(), undefined); assert.equal(f.gate("sibling").block, true);
+    assert.deepEqual(f.entries.filter(e => e.customType === "tool-intent-retry").map(e => e.data.outcome), ["accepted", "rejected"]);
 });
 test("disabled retry and already-valid intent do not create auxiliary requests", async () => {
     const disabled = fixture(answer(), { retry: false }); await disabled.finish(); assert.equal(disabled.requests.length, 0); assert.equal(disabled.gate().block, true);

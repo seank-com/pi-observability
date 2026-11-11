@@ -198,6 +198,24 @@ exact separate development host pin. The tarball test exercises native helper
 imports and real-loader initialization, successful audited execution, blocked
 unaudited execution, redaction, shutdown, and reload without sibling packages.
 
+## Restrictions register
+
+Review in every PR, including changed tests/dependencies. Values below describe
+current implementation; missing evidence or approval is not supplied by their
+age, a merged PR or successful tests. Report additional encountered restrictions
+rather than treating this inventory as exhaustive. Configuration owners are the
+component/fixture maintainers unless a caller override is stated.
+
+| Restriction | Why (what failure does it prevent) |
+| --- | --- |
+| One corrective retry per held call; serial retries; `intentRetry:false` disables. Location: `src/index.ts`, `src/intent-retry.ts`. | Current recovery accepts only the identical tool/arguments plus missing intent, avoiding substitution or repeated execution. The operational/numeric retry policy's explicit approval reference is not established by this inventory. |
+| Retry call120000ms, response budget240000ms, normalized retry response1MiB. Location: `src/intent-retry.ts`; factory `requestTimeoutMs`/`turnBudgetMs` override the time values. | These abort/reject work at the stated thresholds, including potentially progressing work. Necessity of those values and explicit owner approval remain unestablished; deterministic clocks, defaults and merged tests do not establish them. |
+| Intent input4000 and stored1000 UTF-16 units, control/directionality stripping and whitespace normalization. Location: `src/intent.ts`; fixed by component maintainers. | Enforces current audit/display acceptance. Exact-credential replacement is shared with egress, not an additional content parser. Specific bound/filter approval evidence remains to be mapped; do not add content filtering under this rule. |
+| Maximum32 pending normal request snapshots; ambiguity/overflow fail closed until settlement. Location: `src/index.ts`. | Refuses unverified tool authorization when context/egress cannot be paired. Evidence is the documented correlation contract; the numeric32 policy's explicit approval is not established here. |
+| Credential discovery selects nonempty inherited values for registry names containing case-sensitive TOKEN/API_KEY/PASSWORD; traversal/discovery failure blocks egress. Location: `src/egress-redaction.ts`, `src/intent.ts`. | Implements the existing credential-redaction contract without mutating source history. Registry selection and fail-closed behavior are not broader same-account content restrictions; approval provenance must be traced to their owning decisions, not inferred from this table. |
+| Publication scans use the README registry rules, exclude existing `origin/main` ancestry for existing branches and known remotes for new branches. Git capture is256MiB in `scripts/check-private-terms.ts`; paths are overridable with PRIVATE_TERMS_FILE/PRIVATE_SECRETS_FILE. | Main exclusion is the approved PR#8 correction preventing a published baseline from blocking a clean update. New feature messages/lines remain checked. The separate256MiB capture cap's rationale/approval is not established. |
+| `tests/package.test.ts` outer60000ms and npm/typecheck/consumer subprocess30000ms. Configuration owner: test maintainers. | These can fail a slow functional run independently of correctness. Explicit approval is not established; package success does not legitimize those budgets. |
+
 ## Compatibility evidence and limits
 
 This design SHOULD WORK across providers using Pi's normalized object-tool

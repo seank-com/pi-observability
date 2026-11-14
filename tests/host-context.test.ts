@@ -83,8 +83,11 @@ for (const mode of ["valid", "missing", "invalid", "no instrumentation"]) {
         assert.equal(messages.find((m: any) => m.role === "toolResult").isError, mode !== "valid");
         const audits = sessionManager.getBranch().filter((e: any) => e.customType === "tool-intent");
         assert.equal(audits.length, mode === "valid" ? 1 : 0);
-        if (mode === "no instrumentation")
-            assert.match(messages.find((m: any) => m.role === "toolResult").content[0].text, /additional properties/);
+        if (mode === "no instrumentation") {
+            const rejection = messages.find((m: any) => m.role === "toolResult").content[0].text;
+            assert.match(rejection, /\bintent\b/);
+            assert.match(rejection, /additional properties|unknown field/);
+        }
     });
 }
 for (const api of ["openai-completions", "openai-responses", "openai-codex-responses", "anthropic-messages", "google-generative-ai", "mistral-conversations"]) {

@@ -101,6 +101,10 @@ inherited values. `PRIVATE_TERMS_FILE` and `PRIVATE_SECRETS_FILE` select other
 files. `npm run check:private -- --all` checks every staged file, including
 unchanged ones.
 
+Existing-branch pre-push scans exclude history already in the local `origin/main`
+tracking ref. Feature commit messages and added lines outside that baseline remain
+checked. New-branch scans still exclude all known remote history.
+
 Only compiled JS, declarations, generic docs, README, LICENSE, and package
 metadata ship. Source, tests, CI configuration, and development fixtures do not.
 MIT attribution includes both the original public repository and extracted code.
